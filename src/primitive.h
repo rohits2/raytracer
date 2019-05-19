@@ -4,6 +4,7 @@
 #include <cmath>
 
 const float EPS = 1e-5;
+const float PI = 3.1415926;
 
 struct Vec3;
 
@@ -28,6 +29,7 @@ struct Vec3 {
 
     // Two-vector operations.
     Vec3 operator*(const Vec3 &v) const;
+    Vec3 operator/(const Vec3 &v) const;
     Vec3 operator+(const Vec3 &v) const;
     Vec3 operator-(const Vec3 &v) const;
     Vec3 operator%(const Vec3 &v) const;
@@ -40,18 +42,7 @@ struct Vec3 {
     float dot(const Vec3 &v) const;
     Vec3 rotate(int axis, float radians_cw) const;
     Vec3 rotate(const Vec3 &rpy) const;
-};
-
-struct Face {
-    Face(int v0, int v1, int v2, int normal, int c) {
-        this->v0 = v0;
-        this->v1 = v1;
-        this->v2 = v2;
-        this->normal = normal;
-        this->c = c;
-    }
-    int v0, v1, v2, normal;
-    int c;
+    unsigned char compare(const Vec3& other) const;
 };
 
 #endif

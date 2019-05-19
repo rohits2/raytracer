@@ -1,8 +1,12 @@
 #ifndef MESH_H
 #define MESH_H
 
+#include "octree.h"
 #include "primitive.h"
+#include "render.h"
+#include <algorithm>
 #include <fcntl.h>
+#include <set>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -10,48 +14,33 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <vector>
-#include <set>
-#include <algorithm>
 
-using std::vector, std::sort, std::find, std::set;
+using std::vector, std::sort, std::find, std::set, std::swap;
 
-const int RTREE_MAXIMUM_FACES = 64;
-const int RTREE_MAXIMUM_SUBDIVISIONS = 16;
-
-struct BoundingBox {
-    Vec3 ll, ur;
-    BoundingBox(Vec3 ll, Vec3 ur) {
-        this->ll = ll;
-        this->ur = ur;
-    }
-    BoundingBox(){
-
-    }
-    float volume();
-    bool contains(Vec3 point) const;
-};
-
-struct RTreeNode {    
-    BoundingBox bbox;
-    vector<RTreeNode> children;
-    RTreeNode* parent = nullptr;
-    set<int> incident_faces;
-    void push_face();
-};
+struct LightRay;
 
 struct RaycastResult {
-    bool hit;
+    bool hit = false;
     Vec3 hit_location;
     Vec3 normal;
-    float ior;
+    Vec3 color;
     float dist;
+    float ior = 1;
+    float matte = 0.2;
+    float shiny =  1;
+    float scattering = 0;
 };
 
-struct LightRay {
-    Vec3 origin;
-    Vec3 direction;
-    Vec3 intensity;
-    float ior;
+struct Face {
+    Face(int v0, int v1, int v2, int normal, int c) {
+        this->v0 = v0;
+        this->v1 = v1;
+        this->v2 = v2;
+        this->normal = normal;
+        this->c = c;
+    }
+    int v0, v1, v2, normal;
+    int c;
 };
 
 struct Mesh {
@@ -59,19 +48,22 @@ struct Mesh {
     vector<Vec3> vertices, colors, normals;
     vector<Face> faces;
     float ior = 1;
-    float diffusion = 0.2;
-    float smoothness = 1;
+    float matte = 0.2;
+    float shiny = 1;
+    float scattering = 0;
 
-    RTreeNode root;
+    OctreeNode root;
 
-    Mesh(char *obj_file);
+    Mesh(char *obj_file, float ior, float matte, float shiny, float scattering);
     Mesh(vector<Vec3> vertices, vector<Face> faces, vector<Vec3> colors, float ior, float diffusion, float smoothness);
-    RaycastResult raycast(Vec3 origin, Vec3 direction) const;
+    RaycastResult raycast(const LightRay &ray) const;
+    RaycastResult raycast(const LightRay &ray, const OctreeNode *node) const;
+    float intersect(const Vec3 &origin, const Vec3 &direction, const Face &face) const;
 
-    void init_rtree();
+    void init_octree();
+    bool reduce_octree(OctreeNode *node);
+    void read_file(char *obj_file);
     void insert_face(int face_i);
-    void insert_face(int face_i, RTreeNode* root);
-    void split_node(RTreeNode* node);
 };
 
 #endif

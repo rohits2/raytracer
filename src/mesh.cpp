@@ -1,23 +1,20 @@
 #include "mesh.h"
 
-float BoundingBox::volume() {
-    Vec3 edges = ll - ur;
-    return fabs(edges.x * edges.y * edges.z);
-}
-
-bool BoundingBox::contains(Vec3 point) const {
-    bool ll_sat = point.x >= ll.x && point.y >= ll.y && point.z >= ll.z;
-    bool ur_sat = point.x < ur.x && point.y < ur.y && point.z < ur.z;
-    return ll_sat && ur_sat;
-}
-
-Mesh::Mesh(vector<Vec3> vertices, vector<Face> faces, vector<Vec3> colors, float ior, float diffusion, float smoothness) {
+Mesh::Mesh(vector<Vec3> vertices, vector<Face> faces, vector<Vec3> colors, float ior, float matte, float shiny) {
     this->vertices = vertices;
     this->faces = faces;
     this->colors = colors;
     this->ior = ior;
-    this->diffusion = diffusion;
-    this->smoothness = smoothness;
+    this->matte = matte;
+    this->shiny = shiny;
+}
+
+void parse_comment(char **line_start) {
+    char *end = *line_start;
+    while (*end != '\n') {
+        end++;
+    }
+    *line_start = end;
 }
 
 Vec3 parse_vec3(char **line_start) {
@@ -62,22 +59,22 @@ Face parse_face(char **line_start) {
     exit(-2);
 }
 
-void Mesh::init_rtree() {
+void Mesh::init_octree() {
     float min_x = INFINITY, min_y = INFINITY, min_z = INFINITY;
     float max_x = -INFINITY, max_y = -INFINITY, max_z = -INFINITY;
     for (Vec3 point : vertices) {
         min_x = fmin(point.x, min_x);
         min_y = fmin(point.y, min_y);
         min_z = fmin(point.z, min_z);
-        max_x = fmax(point.x + EPS, max_x);
-        max_y = fmax(point.y + EPS, max_y);
-        max_z = fmax(point.z + EPS, max_z);
+        max_x = fmax(point.x, max_x);
+        max_y = fmax(point.y, max_y);
+        max_z = fmax(point.z, max_z);
     }
     BoundingBox bbox(Vec3(min_x, min_y, min_z), Vec3(max_x, max_y, max_z));
-    root.bbox = bbox;
+    root = OctreeNode(bbox);
 }
 
-Mesh::Mesh(char *obj_file) {
+void Mesh::read_file(char *obj_file) {
     // Get file size
     struct stat st;
     int stat_result = stat(obj_file, &st);
@@ -130,6 +127,10 @@ Mesh::Mesh(char *obj_file) {
             faces.push_back(face);
             break;
         }
+        case '#': {
+            parse_comment(&seek);
+            break;
+        }
         case 's': {
             fprintf(stderr, "Smooth shading controls not yet supported! File %s.\n", obj_file);
             exit(-2);
@@ -144,6 +145,38 @@ Mesh::Mesh(char *obj_file) {
     // Unmap file
     munmap(file, size);
     close(fd);
+}
+
+bool Mesh::reduce_octree(OctreeNode *node) {
+    if (node->total_faces < OCTREE_MINIMUM_FACES) {
+        node->contract();
+        return true;
+    }
+    if (node->is_leaf()) {
+        return false;
+    }
+    bool reduce_ok = true;
+    for (unsigned char i = 0; i < 8; i++) {
+        reduce_ok = reduce_ok && reduce_octree(&node->children[i]);
+    }
+    if (reduce_ok) {
+        node->contract();
+#ifdef DEBUG_OCTREE
+        printf("Reduced an octree node!\n");
+#endif
+    }
+    return false;
+}
+
+Mesh::Mesh(char *obj_file, float ior, float matte, float shiny, float scattering) {
+    read_file(obj_file);
+    this->ior = ior;
+    this->matte = matte;
+    this->shiny = shiny;
+    this->scattering = scattering;
+
+    // Monocolor
+    colors.push_back(Vec3(1, 1, 1));
 
     // Build normals
     printf("Parsed %zu vertices and %zu faces from %s!\n", vertices.size(), faces.size(), obj_file);
@@ -152,140 +185,22 @@ Mesh::Mesh(char *obj_file) {
         Vec3 r = vertices[face.v2] - vertices[face.v1]; // v2-v1
         normals.push_back(l % r);
         face.normal = normals.size() - 1;
+        face.c = 0;
     }
 
-    // Make R-Tree
-    init_rtree();
+    // Update Octree bbox
+    init_octree();
+
+    // Insert faces
     for (int i = 0; i < faces.size(); i++) {
         insert_face(i);
     }
-}
 
-float median(vector<float> data) {
-    sort(data.begin(), data.end());
-    float firstVal = data[0];
-    for (int i = data.size() / 2; i < data.size(); i++) {
-        if (data[i] != firstVal) {
-            return data[i];
-        }
-    }
-    fprintf(stderr, "Could not split array into 50th percentile! Check the integrity of the OBJ file.\n");
-    return firstVal+EPS;
-}
+    // Compute statistics
+    root.count_faces();
 
-void Mesh::split_node(RTreeNode *node) {
-    // Get all XYZ of owned vertices
-    vector<float> xs, ys, zs;
-    for (int face_id : node->incident_faces) {
-        Face &sface = faces[face_id];
-        auto sverts = {vertices[sface.v0], vertices[sface.v1], vertices[sface.v2]};
-        for (const Vec3 &svert : sverts) {
-            if (node->bbox.contains(svert)) {
-                xs.push_back(svert.x);
-                ys.push_back(svert.y);
-                zs.push_back(svert.z);
-            }
-        }
-    }
-    // Find the median in all dimensions
-    float mx = median(xs);
-    float my = median(ys);
-    float mz = median(zs);
-    if (xs[0] == xs[xs.size() - 1] && ys[0] == ys[ys.size() - 1] && zs[0] == zs[zs.size() - 1]) {
-#ifdef DEBUG_RTREE
-        printf("Cannot split this node - all vertices are coincident!\n");
-#endif
-        return;
-    }
-
-    // Find the center of the axis
-    Vec3 center = (node->bbox.ur + node->bbox.ll) / 2;
-    // Find the most even split in both geometric and dense terms
-    int split_dim = -1;
-    float split_value = NAN;
-    float best_diff = INFINITY;
-    if (fabs(mx - center.x) < best_diff && xs[0] != xs[xs.size() - 1]) {
-        split_dim = 1;
-        split_value = mx;
-        best_diff = fabs(mx - center.x);
-    }
-    if (fabs(my - center.y) < best_diff && ys[0] != ys[ys.size() - 1]) {
-        split_dim = 1;
-        split_value = my;
-        best_diff = fabs(my - center.y);
-    }
-    if (fabs(mz - center.z) < best_diff && zs[0] != zs[zs.size() - 1]) {
-        split_dim = 2;
-        split_value = mz;
-        best_diff = fabs(mz - center.z);
-    }
-#ifdef DEBUG_RTREE
-    printf("Splitting on axis %d, divergence %f\n", split_dim, best_diff);
-#endif
-
-    // Erase the current node in preparation for the new one
-    set<int> old_faces = node->incident_faces;
-    node->incident_faces.clear();
-
-    // Calculate the new boundary after the split
-    RTreeNode new_node;
-    Vec3 new_brk_ll = node->bbox.ll;
-    Vec3 new_brk_ur = node->bbox.ur;
-    switch (split_dim) {
-    case 0: {
-        new_brk_ll.x = split_value;
-        new_brk_ur.x = split_value;
-        break;
-    }
-    case 1: {
-        new_brk_ll.y = split_value;
-        new_brk_ur.y = split_value;
-        break;
-    }
-    case 2: {
-        new_brk_ll.z = split_value;
-        new_brk_ur.z = split_value;
-        break;
-    }
-    }
-
-    // Construct one new node
-    new_node.bbox = BoundingBox(new_brk_ll, node->bbox.ur);
-    // If it can be added as a peer leaf to the current node, do so
-    if (node->parent != nullptr && node->parent->children.size() < RTREE_MAXIMUM_SUBDIVISIONS) {
-        node->bbox = BoundingBox(node->bbox.ll, new_brk_ur);
-        new_node.parent = node->parent;
-        node->parent->children.push_back(new_node);
-#ifdef DEBUG_RTREE
-        printf("Adding new node as peer, parent now has %zu children\n", node->parent->children.size());
-        printf("Re-inserting %zu faces into parent...\n", old_faces.size());
-#endif
-        for (int face_id : old_faces) {
-            insert_face(face_id, node->parent);
-        }
-    } else {
-#ifdef DEBUG_RTREE
-        printf("Parent node is full/nonexistent, adding extra nodes to divide this one.\n");
-#endif
-        // Otherwise, create another node to make the current node internal
-        RTreeNode new_node2;
-        new_node2.bbox = BoundingBox(node->bbox.ll, new_brk_ur);
-        new_node.parent = node;
-        new_node2.parent = node;
-        node->children.push_back(new_node);
-        node->children.push_back(new_node2);
-#ifdef DEBUG_RTREE
-        printf("Re-inserting %zu faces into node...\n", old_faces.size());
-#endif
-        for (int face_id : old_faces) {
-            insert_face(face_id, node);
-            printf("Insert %d\n", face_id);
-        }
-    }
-#ifdef DEBUG_RTREE
-
-#endif
-    // Re-insert all faces
+    // Shrink Octree
+    reduce_octree(&root);
 }
 
 void Mesh::insert_face(int face_i) {
@@ -293,53 +208,105 @@ void Mesh::insert_face(int face_i) {
     auto verts = {vertices[face.v0], vertices[face.v1], vertices[face.v2]};
     for (const Vec3 &vert : verts) {
         // Find host node
-        RTreeNode *cur_root = &root;
-        while (cur_root->children.size() > 0) {
-            for (RTreeNode &child : cur_root->children) {
-                if (child.bbox.contains(vert)) {
-                    cur_root = &child;
-                    break;
-                }
-            }
+        OctreeNode *node = root.find(vert);
+        while (node->depth < OCTREE_MAXIMUM_DEPTH) {
+            node->explode();
+            node = node->find(vert);
         }
-        // Push to node
-        if (find(cur_root->incident_faces.begin(), cur_root->incident_faces.end(), face_i) == cur_root->incident_faces.end()) {
-            cur_root->incident_faces.insert(face_i);
-        }
-        // Determine if the node requires a split
-        if (cur_root->incident_faces.size() > RTREE_MAXIMUM_FACES) {
-            split_node(cur_root);
-        }
+        node->incident_faces.insert(face_i);
     }
 }
 
-void Mesh::insert_face(int face_i, RTreeNode *root) {
-    Face face = faces[face_i];
-    auto verts = {vertices[face.v0], vertices[face.v1], vertices[face.v2]};
-    for (const Vec3 &vert : verts) {
-        // Find host node
-        RTreeNode *cur_root = root;
-        RTreeNode *last_root = root;
-        while (cur_root->children.size() > 0) {
-            for (RTreeNode &child : cur_root->children) {
-                if (child.bbox.contains(vert)) {
-                    cur_root = &child;
-                    break;
-                }
-            }
-            if (cur_root == last_root) {
-                printf("INFINITE LOOP DET.\n");
-            }
-        }
-        // Push to node
-        if (find(cur_root->incident_faces.begin(), cur_root->incident_faces.end(), face_i) == cur_root->incident_faces.end()) {
-            cur_root->incident_faces.insert(face_i);
-        }
-        // Determine if the node requires a split
-        if (cur_root->incident_faces.size() > RTREE_MAXIMUM_FACES) {
-            split_node(cur_root);
-        }
-    }
+RaycastResult Mesh::raycast(const LightRay &ray) const { return raycast(ray, &root); }
+
+bool LightRay::intersect(const BoundingBox &bbox) const {
+    Vec3 t_min = (bbox.llb - origin) / direction;
+    Vec3 t_max = (bbox.urf - origin) / direction;
+
+    if (t_min.x > t_max.x) swap(t_min.x, t_max.x);
+    if (t_min.y > t_max.y) swap(t_min.y, t_max.y);
+    if (t_min.z > t_max.z) swap(t_min.z, t_max.z);
+
+    float bracket_min = fmax(fmax(t_min.x, t_min.y), t_min.z);
+    float bracket_max = fmin(fmin(t_max.x, t_max.y), t_max.z);
+    /*if (bracket_max + 1 >= bracket_min)
+        printf("Intersect fail ray (%f %f %f)+(%f %f %f)t\n\tBBOX (%f %f %f), (%f %f %f)\n\tMAX %f MIN %f\n", origin.x, origin.y, origin.z,
+       direction.x, direction.y, direction.z, bbox.llb.x, bbox.llb.y, bbox.llb.z, bbox.urf.x, bbox.urf.y, bbox.urf.z, bracket_max, bracket_min);
+*/
+    return bracket_max + EPS >= bracket_min;
 }
 
-RaycastResult Mesh::raycast(Vec3 origin, Vec3 direction) const {}
+RaycastResult Mesh::raycast(const LightRay &ray, const OctreeNode *node) const {
+    RaycastResult res;
+    if (!ray.intersect(node->extent)) {
+        return res;
+    }
+    if (!node->is_leaf()) {
+        for (const OctreeNode &subnode : node->children) {
+            RaycastResult subres = raycast(ray, &subnode);
+            if ((!res.hit && subres.hit) || (subres.hit && res.hit && subres.dist < res.dist)) {
+                res = subres;
+            }
+        }
+        return res;
+    }
+    for (int face_i : node->incident_faces) {
+        const Face &face = faces[face_i];
+        float dist = intersect(ray.origin, ray.direction, face);
+        if ((!res.hit && dist > 0) || (res.hit && dist > 0 && dist < res.dist)) {
+            res.hit = true;
+            res.dist = dist;
+            res.hit_location = ray.origin + ray.direction * dist;
+            res.ior = ior;
+            res.matte = matte;
+            res.scattering = scattering;
+            res.shiny = shiny;
+            res.color = colors[face.c];
+        }
+    }
+    return res;
+}
+
+float Mesh::intersect(const Vec3 &origin, const Vec3 &ray, const Face &tri) const {
+    // return 1;
+    // Extract vectors from tables
+    const Vec3 &normal = normals[tri.normal];
+    const Vec3 &v0 = vertices[tri.v0];
+    const Vec3 &v1 = vertices[tri.v1];
+    const Vec3 &v2 = vertices[tri.v2];
+
+    // Determine ray-plane intersection.
+    // Construct the point-norm eq Ax + By + Cz + D = 0
+    float D = -(v0 ^ normal); // hehe float D
+    // Solve Ax + By + Cz + D = 0, where (x,y,z) = tR+O
+    // Can factor out the O:
+    float Ds = D + (normal ^ origin);
+    // Now the eq is to check if Apt + Bqt + Crt = -D
+    // We can merge Ap, Bq, Cr = F to get Ft = -D
+    float F = normal ^ ray;
+    float t = -Ds / F;
+    // If F is zero then the plane and ray are parallel
+    // If t is negative, then there is no intersection
+    if (fabs(F) < EPS || t < EPS) {
+        return -1;
+    }
+    Vec3 intersect = origin + ray * t;
+    // Determine barycentric basis.
+    Vec3 A = v1 - v0;
+    Vec3 B = v2 - v1;
+    Vec3 C = v0 - v2;
+    Vec3 AP = intersect - v0;
+    Vec3 BP = intersect - v1;
+    Vec3 CP = intersect - v2;
+    // Now check if intersection point is in the interior of the v1 crux angle
+    if (((A % AP) ^ normal) >= 0) {
+        return -1;
+    }
+    if (((B % BP) ^ normal) >= 0) {
+        return -1;
+    }
+    if (((C % CP) ^ normal) >= 0) {
+        return -1;
+    }
+    return t;
+}

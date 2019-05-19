@@ -20,6 +20,9 @@ Vec3 Vec3::operator-() const { return Vec3(-x, -y, -z); }
 // Element-wise multiplication
 Vec3 Vec3::operator*(const Vec3 &v) const { return Vec3(x * v.x, y * v.y, z * v.z); }
 
+// Element-wise division
+Vec3 Vec3::operator/(const Vec3 &v) const { return Vec3(x / v.x, y / v.y, z / v.z); }
+
 // Element-wise addition
 Vec3 Vec3::operator+(const Vec3 &v) const { return Vec3(x + v.x, y + v.y, z + v.z); }
 
@@ -80,6 +83,14 @@ Vec3 Vec3::rotate(const Vec3 &rpy) const {
     vec = vec.rotate(1, rpy.y);
     vec = vec.rotate(2, rpy.z);
     return vec;
+}
+
+unsigned char Vec3::compare(const Vec3& other) const{
+    unsigned char bitcode = 0;
+    bitcode |= x > other.x;
+    bitcode |= (y > other.y) << 1;
+    bitcode |= (z > other.z) << 2;
+    return bitcode;
 }
 
 /************************ Externally defined vector operators ******************/
