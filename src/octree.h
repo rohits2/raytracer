@@ -15,8 +15,8 @@
 
 using std::vector, std::sort, std::find, std::set;
 
-const int OCTREE_MINIMUM_FACES = 128;
-const int OCTREE_MAXIMUM_DEPTH = 10;
+const int OCTREE_MINIMUM_FACES = 32;
+const int OCTREE_MAXIMUM_DEPTH = 20;
 
 struct BoundingBox {
     Vec3 llb, urf;
