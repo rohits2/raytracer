@@ -155,15 +155,8 @@ bool Mesh::reduce_octree(OctreeNode *node) {
     if (node->is_leaf()) {
         return false;
     }
-    bool reduce_ok = true;
     for (unsigned char i = 0; i < 8; i++) {
-        reduce_ok = reduce_ok && reduce_octree(&node->children[i]);
-    }
-    if (reduce_ok) {
-        node->contract();
-#ifdef DEBUG_OCTREE
-        printf("Reduced an octree node!\n");
-#endif
+        reduce_octree(&node->children[i]);
     }
     return false;
 }
