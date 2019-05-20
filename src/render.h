@@ -29,7 +29,7 @@ struct Light {
 
 struct Camera {
   public:
-    Vec3 loc = Vec3(0, 4, -10);
+    Vec3 loc = Vec3(0, 4, -6);
     Vec3 rotation; // = Vec3(-0.523599, 0, 0); // PYR, default is looking down Z+
     float focal_plane_distance = 1;
     float focal_plane_width = 4;
@@ -47,7 +47,7 @@ struct Camera {
         : focal_plane_distance(focal_distance), focal_plane_width(width), focal_plane_height(height) {
         exposure_mode = AUTO_LINEAR_EXPOSURE;
     }
-    int max_reflections = 8;
+    int max_reflections = 3;
 };
 
 struct LightRay {

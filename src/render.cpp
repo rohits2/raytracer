@@ -6,7 +6,7 @@ void Camera::expose(Canvas &canvas) const {
     case AUTO_LINEAR_EXPOSURE: {
         max_exposure = -INFINITY;
         for (int i = 0; i < canvas.height; i++) {
-            for (int j = 0; j < canvas.height; j++) {
+            for (int j = 0; j < canvas.width; j++) {
                 max_exposure.x = fmax(max_exposure.x, canvas[i][j].x);
                 max_exposure.y = fmax(max_exposure.y, canvas[i][j].y);
                 max_exposure.z = fmax(max_exposure.z, canvas[i][j].z);
@@ -19,7 +19,7 @@ void Camera::expose(Canvas &canvas) const {
         break;
     }
     for (int i = 0; i < canvas.height; i++) {
-        for (int j = 0; j < canvas.height; j++) {
+        for (int j = 0; j < canvas.width; j++) {
             canvas[i][j] = canvas[i][j] / max_exposure;
             if (canvas[i][j].x > 1) canvas[i][j].x = 1;
             if (canvas[i][j].y > 1) canvas[i][j].y = 1;
@@ -102,7 +102,9 @@ Vec3 local_illuminate(const RaycastResult &hit, const Scene &scene) {
         for (const Mesh &mesh : scene.meshes) {
             RaycastResult rr = mesh.raycast(shadow_ray);
             if (!rr.hit) {
-                Vec3 intensity = light.intensity * (shadow_ray.direction ^ hit.normal) / (4 * PI * dist * dist);
+                Vec3 intensity = light.intensity / (4 * PI * dist * dist);
+                float lambertian_falloff = fabs(shadow_ray.direction ^ hit.normal);
+                intensity = intensity * lambertian_falloff;
                 total_illumination = total_illumination + intensity;
             }
         }
@@ -111,7 +113,7 @@ Vec3 local_illuminate(const RaycastResult &hit, const Scene &scene) {
 }
 
 Vec3 raytrace(const LightRay &ray, const Scene &scene) {
-    if (ray.intensity.sum() < EPS) {
+    if (ray.intensity.sum() < EPS || ray.bounce_count >= scene.camera.max_reflections) {
         return Vec3(0, 0, 0);
     }
 
@@ -133,14 +135,15 @@ Vec3 raytrace(const LightRay &ray, const Scene &scene) {
 
     if (reflection_intensity >= EPS) {
         LightRay reflection = get_reflection(ray, rr);
-        reflection.intensity = reflection.intensity * ray.intensity * reflection_intensity * 0.9;
+        reflection.intensity = reflection.intensity * ray.intensity * reflection_intensity * 0.999 * rr.shiny;
         color = color + raytrace(reflection, scene);
     }
     if (refraction_intensity >= EPS) {
         LightRay refraction = get_refraction(ray, rr);
-        refraction.intensity = refraction.intensity * ray.intensity * refraction_intensity * 0.9;
+        refraction.intensity = refraction.intensity * ray.intensity * refraction_intensity * 0.999 * rr.scattering;
         color = color + raytrace(refraction, scene);
     }
+
     return color;
 }
 
@@ -151,14 +154,17 @@ void subrender(Canvas &canvas, const Scene &scene, vector<int> tile) {
         LightRay ray = scene.camera.get_initial_ray(canvas, id);
         int i = id / canvas.width;
         int j = id % canvas.width;
-        canvas[i][j] = raytrace(ray, scene);
+        Vec3 color = raytrace(ray, scene);
+        canvas[i][j] = color;
     }
 }
 
 void queue_render(Canvas &canvas, const Scene &scene, queue<vector<int>> &tile_queue, mutex &tile_queue_lock) {
     tile_queue_lock.lock();
     while (!tile_queue.empty()) {
-        printf("Tile queue has %lu remaining...\n", tile_queue.size());
+        if (tile_queue.size() % 1 == 0) {
+            printf("Tile queue has %lu tiles remaining...\n", tile_queue.size());
+        }
         vector<int> tile = tile_queue.front();
         tile_queue.pop();
         tile_queue_lock.unlock();
@@ -176,6 +182,7 @@ void render(Canvas &canvas, const Scene &scene) {
             for (int ii = i; ii < min(canvas.height, i + RENDER_TILE_SIZE); ii++) {
                 for (int jj = j; jj < min(canvas.width, j + RENDER_TILE_SIZE); jj++) {
                     int ind = ii * canvas.width + jj;
+                    // printf("(%d, %d) -> %d\n", ii, jj, ind);
                     tile.push_back(ind);
                 }
             }
@@ -183,11 +190,11 @@ void render(Canvas &canvas, const Scene &scene) {
         }
     }
     mutex queue_lock;
-    thread workers[15];
-    for (int i = 0; i < 15; i++) {
+    thread workers[256];
+    for (int i = 0; i < thread::hardware_concurrency(); i++) {
         workers[i] = thread(queue_render, ref(canvas), cref(scene), ref(tile_queue), ref(queue_lock));
     }
-    for (int i = 0; i < 15; i++) {
+    for (int i = 0; i < thread::hardware_concurrency(); i++) {
         workers[i].join();
     }
     scene.camera.expose(canvas);
