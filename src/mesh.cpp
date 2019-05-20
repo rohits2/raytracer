@@ -183,7 +183,7 @@ Mesh::Mesh(char *obj_file, float ior, float matte, float shiny, float scattering
     for (Face &face : faces) {
         Vec3 l = vertices[face.v0] - vertices[face.v1]; // v0-v1
         Vec3 r = vertices[face.v2] - vertices[face.v1]; // v2-v1
-        normals.push_back(l % r);
+        normals.push_back((l % r).normalize());
         face.normal = normals.size() - 1;
         face.c = 0;
     }
@@ -217,7 +217,12 @@ void Mesh::insert_face(int face_i) {
     }
 }
 
-RaycastResult Mesh::raycast(const LightRay &ray) const { return raycast(ray, &root); }
+RaycastResult Mesh::raycast(const LightRay &ray) const {
+    LightRay transformed_ray = ray;
+    transformed_ray.origin = ray.origin - position;
+    transformed_ray.direction = ray.direction.rotate(-rotation);
+    return raycast(transformed_ray, &root);
+}
 
 bool LightRay::intersect(const BoundingBox &bbox) const {
     Vec3 t_min = (bbox.llb - origin) / direction;
@@ -229,10 +234,7 @@ bool LightRay::intersect(const BoundingBox &bbox) const {
 
     float bracket_min = fmax(fmax(t_min.x, t_min.y), t_min.z);
     float bracket_max = fmin(fmin(t_max.x, t_max.y), t_max.z);
-    /*if (bracket_max + 1 >= bracket_min)
-        printf("Intersect fail ray (%f %f %f)+(%f %f %f)t\n\tBBOX (%f %f %f), (%f %f %f)\n\tMAX %f MIN %f\n", origin.x, origin.y, origin.z,
-       direction.x, direction.y, direction.z, bbox.llb.x, bbox.llb.y, bbox.llb.z, bbox.urf.x, bbox.urf.y, bbox.urf.z, bracket_max, bracket_min);
-*/
+
     return bracket_max + EPS >= bracket_min;
 }
 
@@ -262,6 +264,7 @@ RaycastResult Mesh::raycast(const LightRay &ray, const OctreeNode *node) const {
             res.scattering = scattering;
             res.shiny = shiny;
             res.color = colors[face.c];
+            res.normal = normals[face_i];
         }
     }
     return res;
