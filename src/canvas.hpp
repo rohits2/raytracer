@@ -40,7 +40,7 @@ struct Canvas {
         }
 
         // create buffer
-        unsigned char *file = new unsigned char[length];
+        unsigned char *file = (unsigned char*) calloc(length+1, sizeof(unsigned char));
 
         // write headers        
         memcpy(file, header, header_sz);
@@ -67,7 +67,7 @@ struct Canvas {
 
         // free buffers
         free(header);
-        delete[] file;
+        free(file);
     }
 };
 
