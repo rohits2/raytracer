@@ -2,4 +2,4 @@
 A simple raytracer.
 
 ### Recent Renders
-![Crystal Cow](images/hirescow.ppm)
+![Crystal Cow](images/hirescow.png)
