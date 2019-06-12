@@ -59,19 +59,56 @@ Face parse_face(char **line_start) {
     exit(-2);
 }
 
-void Mesh::init_octree() {
-    float min_x = INFINITY, min_y = INFINITY, min_z = INFINITY;
-    float max_x = -INFINITY, max_y = -INFINITY, max_z = -INFINITY;
-    for (Vec3 point : vertices) {
-        min_x = fmin(point.x, min_x);
-        min_y = fmin(point.y, min_y);
-        min_z = fmin(point.z, min_z);
-        max_x = fmax(point.x, max_x);
-        max_y = fmax(point.y, max_y);
-        max_z = fmax(point.z, max_z);
+void Mesh::init_aabb() {
+    vector<AABBNode> hot_queue;
+    for (int i = 0; i < faces.size(); i++) {
+        Face &face = faces[i];
+        Vec3 v0 = vertices[face.v0];
+        Vec3 v1 = vertices[face.v1];
+        Vec3 v2 = vertices[face.v2];
+        Vec3 llb = v0;
+        Vec3 urf = v0;
+        llb.x = fmin(v1.x, llb.x);
+        llb.x = fmin(v2.x, llb.x);
+        llb.y = fmin(v1.y, llb.y);
+        llb.y = fmin(v2.y, llb.y);
+        llb.z = fmin(v1.z, llb.z);
+        llb.z = fmin(v2.z, llb.z);
+
+        urf.x = fmax(v1.x, urf.x);
+        urf.x = fmax(v2.x, urf.x);
+        urf.y = fmax(v1.y, urf.y);
+        urf.y = fmax(v2.y, urf.y);
+        urf.z = fmax(v1.z, urf.z);
+        urf.z = fmax(v2.z, urf.z);
+
+        BoundingBox extent(llb, urf);
+        hot_queue.push_back(AABBNode(extent, i));
     }
-    BoundingBox bbox(Vec3(min_x, min_y, min_z), Vec3(max_x, max_y, max_z));
-    root = OctreeNode(bbox);
+    while (hot_queue.size() >= AABB_L1_SIZE) {
+        float best_compactness = INFINITY;
+        AABBNode &node1 = hot_queue.back();
+        hot_queue.pop_back();
+        int node2_i = -1;
+        for (int i = 0; i < hot_queue.size(); i++) {
+            AABBNode &node2 = hot_queue[i];
+            BoundingBox join = node1.extent.join(node2.extent);
+            if (join.volume() < best_compactness) {
+                best_compactness = join.volume();
+                node2_i = i;
+            }
+        }
+        if (node2_i != -1) {
+            hot_queue[node2_i] = node1.join(hot_queue[node2_i]);
+        }
+    }
+    root = AABBNode();
+    root.children = hot_queue;
+    BoundingBox global_box = hot_queue[0].extent;
+    for (int i = 0; i < hot_queue.size(); i++) {
+        global_box = global_box.join(root.children[0].extent);
+    }
+    root.extent = global_box;
 }
 
 void Mesh::read_file(char *obj_file) {
@@ -147,18 +184,17 @@ void Mesh::read_file(char *obj_file) {
     close(fd);
 }
 
-bool Mesh::reduce_octree(OctreeNode *node) {
-    if (node->total_faces < OCTREE_MINIMUM_FACES) {
+void Mesh::reduce_aabb(AABBNode *node) {
+    if(node->is_leaf()){
+        return;
+    }
+    if(node->subface_count <= AABB_MINIMUM_FACES){
         node->contract();
-        return true;
+        return;
     }
-    if (node->is_leaf()) {
-        return false;
+    for(AABBNode& child:node->children){
+        reduce_aabb(&child);
     }
-    for (unsigned char i = 0; i < 8; i++) {
-        reduce_octree(&node->children[i]);
-    }
-    return false;
 }
 
 Mesh::Mesh(char *obj_file, float ior, float matte, float shiny, float scattering) {
@@ -182,39 +218,22 @@ Mesh::Mesh(char *obj_file, float ior, float matte, float shiny, float scattering
     }
 
     // Update Octree bbox
-    init_octree();
-
-    // Insert faces
-    for (int i = 0; i < faces.size(); i++) {
-        insert_face(i);
-    }
+    init_aabb();
 
     // Compute statistics
-    root.count_faces();
+    root.count_subnodes();
 
     // Shrink Octree
-    reduce_octree(&root);
-}
-
-void Mesh::insert_face(int face_i) {
-    Face face = faces[face_i];
-    auto verts = {vertices[face.v0], vertices[face.v1], vertices[face.v2]};
-    for (const Vec3 &vert : verts) {
-        // Find host node
-        OctreeNode *node = root.find(vert);
-        while (node->depth < OCTREE_MAXIMUM_DEPTH) {
-            node->explode();
-            node = node->find(vert);
-        }
-        node->incident_faces.insert(face_i);
-    }
+    reduce_aabb(&root);
 }
 
 RaycastResult Mesh::raycast(const LightRay &ray) const {
     LightRay transformed_ray = ray;
     transformed_ray.origin = ray.origin - position;
-    transformed_ray.direction = ray.direction.rotate(-rotation);
-    return raycast(transformed_ray, &root);
+    transformed_ray.direction = ray.direction.unrotate(rotation);
+    RaycastResult rr = raycast(transformed_ray, &root);
+    rr.hit_location = (rr.hit_location - transformed_ray.origin).rotate(rotation) + ray.origin;
+    return rr;
 }
 
 bool LightRay::intersect(const BoundingBox &bbox) const {

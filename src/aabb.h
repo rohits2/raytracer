@@ -15,36 +15,34 @@
 
 using std::vector, std::sort, std::find, std::set;
 
-const int OCTREE_MINIMUM_FACES = 8;
-const int OCTREE_MAXIMUM_DEPTH = 20;
+const int AABB_MINIMUM_FACES = 8;
+const int AABB_L1_SIZE = 8;
 
 struct BoundingBox {
     Vec3 llb, urf;
-    BoundingBox(const Vec3& llb, const Vec3& urf) {
+    BoundingBox(const Vec3 &llb, const Vec3 &urf) {
         this->llb = llb;
         this->urf = urf;
     }
     BoundingBox(){};
     float volume();
-    bool contains(const Vec3& point) const;
+    bool contains(const Vec3 &point) const;
+    BoundingBox join(const BoundingBox &other) const;
 };
 
-struct OctreeNode {
+struct AABBNode {
     BoundingBox extent;
-    Vec3 splitting_plane;
-    unsigned char depth = 0;
-    unsigned int total_faces = 0;
-    vector<OctreeNode> children;
+    vector<AABBNode> children;
+    unsigned subface_count;
     set<int> incident_faces;
-    OctreeNode *parent = nullptr;
-    OctreeNode();
-    OctreeNode(const BoundingBox &extent);
-    OctreeNode(const OctreeNode *parent, unsigned char octant);
+    AABBNode();
+    AABBNode(const BoundingBox &extent, int face_i);
+    int count_subnodes();
     bool is_leaf() const;
-    void explode();
+    AABBNode join(const AABBNode &other) const;
     void contract();
-    void count_faces();
-    OctreeNode *find(const Vec3 &point);
+    void subsume_children();
+    AABBNode *find(const Vec3 &point);
 };
 
 #endif

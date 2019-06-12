@@ -85,6 +85,13 @@ Vec3 Vec3::rotate(const Vec3 &rpy) const {
     return vec;
 }
 
+Vec3 Vec3::unrotate(const Vec3 &irpy) const {
+    Vec3 vec = rotate(2, -irpy.z);
+    vec = vec.rotate(1, -irpy.y);
+    vec = vec.rotate(0, -irpy.x);
+    return vec;
+}
+
 unsigned char Vec3::compare(const Vec3& other) const{
     unsigned char bitcode = 0;
     bitcode |= x > other.x;

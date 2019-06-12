@@ -42,6 +42,7 @@ struct Vec3 {
     float dot(const Vec3 &v) const;
     Vec3 rotate(int axis, float radians_cw) const;
     Vec3 rotate(const Vec3 &rpy) const;
+    Vec3 unrotate(const Vec3 &rpy) const;
     unsigned char compare(const Vec3& other) const;
 };
 
